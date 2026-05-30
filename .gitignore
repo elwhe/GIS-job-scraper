@@ -1,16 +1,11 @@
-# فایل‌هایی که نباید به GitHub آپلود بشن
 
-# کلیدهای واقعی — هیچ‌وقت push نشن
 .env
 
-# فایل کش محلی
 seen_jobs.txt
 
-# فایل‌های Python
 __pycache__/
 *.py[cod]
 *.pyc
 
-# فایل سرویس‌اکانت گوگل
 *.json
 !.env.example
