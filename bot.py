@@ -1,72 +1,52 @@
 import requests
 import os
 import html
-import json
 import time
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 
-# ─────────────────────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # ENV
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 RAPIDAPI_KEY     = os.environ["RAPIDAPI_KEY"]
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-SEEN_JOBS_FILE   = Path("seen_jobs.txt")
-MAX_JOBS_PER_RUN = 10
+SEEN_FILE = Path("seen_jobs.txt")
 
-# ─────────────────────────────────────────────────────────────
-# CORE SEARCH (Spatial Data Science Focus)
-# ─────────────────────────────────────────────────────────────
+MAX_JOBS = 10
+
+# ─────────────────────────────────────────────
+# SEARCH (PhD focused)
+# ─────────────────────────────────────────────
 SEARCH_QUERIES = [
-    "Geospatial Data Scientist",
-    "Spatial Data Scientist",
-    "GIS Data Scientist",
-    "Geospatial Machine Learning Engineer",
-
-    "Smart City Data Scientist",
-    "Urban Data Scientist",
-    "Urban Informatics",
-    "Smart Mobility Analyst",
-
-    "Transportation Data Scientist",
-    "Mobility Data Scientist",
-    "Public Transit Analyst",
-
-    "GIS Analyst Python",
-    "Geospatial Developer",
-    "GIS Engineer",
-
+    "fully funded PhD GIS",
+    "PhD Geospatial Data Science",
+    "PhD Urban Analytics",
+    "PhD Smart Cities",
+    "PhD Transportation Engineering",
+    "PhD Spatial Data Science",
     "Research Assistant GIS",
-    "Urban Analytics Researcher",
-    "PhD GIS",
+    "Research Fellow Urban Analytics",
 ]
 
-# ─────────────────────────────────────────────────────────────
-# Load seen jobs
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# LOAD / SAVE
+# ─────────────────────────────────────────────
 def load_seen():
-    if SEEN_JOBS_FILE.exists():
-        return set(SEEN_JOBS_FILE.read_text().splitlines())
+    if SEEN_FILE.exists():
+        return set(SEEN_FILE.read_text().splitlines())
     return set()
 
 def save_seen(seen):
-    SEEN_JOBS_FILE.write_text("\n".join(list(seen)[-2000:]))
+    SEEN_FILE.write_text("\n".join(list(seen)[-3000:]))
 
-# ─────────────────────────────────────────────────────────────
-# API
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# JOB API
+# ─────────────────────────────────────────────
 def search_jobs(query):
     url = "https://jsearch.p.rapidapi.com/search"
     headers = {
@@ -76,133 +56,140 @@ def search_jobs(query):
     params = {
         "query": query,
         "num_pages": "1",
-        "date_posted": "3days",
+        "date_posted": "7days",
     }
 
     try:
         r = requests.get(url, headers=headers, params=params, timeout=20)
         if r.status_code != 200:
             return []
-        data = r.json()
-        return data.get("data", [])
+        return r.json().get("data", [])
     except:
         return []
 
-# ─────────────────────────────────────────────────────────────
-# Scoring System (MIGRATION INTELLIGENCE)
-# ─────────────────────────────────────────────────────────────
-def score_job(job):
+# ─────────────────────────────────────────────
+# SCORE (PhD PRIORITY ENGINE)
+# ─────────────────────────────────────────────
+def score(job):
     text = ((job.get("job_title") or "") + " " + (job.get("job_description") or "")).lower()
 
-    score = 0
+    s = 0
 
-    # Core GIS / Spatial
-    if "geospatial" in text: score += 5
-    if "spatial" in text: score += 4
-    if "gis" in text: score += 4
+    # 🎓 PhD core
+    if "phd" in text: s += 12
+    if "fully funded" in text: s += 10
+    if "funded" in text: s += 6
+    if "stipend" in text: s += 6
+    if "scholarship" in text: s += 6
 
-    # Core skills
-    if "python" in text: score += 3
-    if "machine learning" in text: score += 4
-    if "data science" in text: score += 4
-    if "sql" in text: score += 2
+    # 🧠 field fit
+    if "geospatial" in text: s += 6
+    if "spatial" in text: s += 5
+    if "gis" in text: s += 5
+    if "urban" in text: s += 4
+    if "smart city" in text: s += 6
+    if "transportation" in text: s += 5
+    if "mobility" in text: s += 5
 
-    # Domain relevance
-    if "urban" in text: score += 3
-    if "smart city" in text: score += 4
-    if "transportation" in text: score += 4
-    if "mobility" in text: score += 4
-    if "transit" in text: score += 3
+    # 🧪 research signals
+    if "research assistant" in text: s += 8
+    if "research fellow" in text: s += 8
+    if "university" in text: s += 4
+    if "lab" in text: s += 3
 
-    # Research advantage
-    if "research" in text: score += 2
-    if "phd" in text: score += 3
-    if "university" in text: score += 2
+    # ❌ noise filter
+    if "seo" in text: s -= 20
+    if "marketing" in text: s -= 10
+    if "content" in text: s -= 10
+    if "sales" in text: s -= 8
+    if "senior" in text: s -= 3
 
-    # NEGATIVE FILTER (SEO killer)
-    if "seo" in text: score -= 10
-    if "marketing" in text: score -= 8
-    if "content" in text: score -= 6
-    if "wordpress" in text: score -= 6
+    return s
 
-    return score
+# ─────────────────────────────────────────────
+# GOOGLE SCHOLAR (Supervisor Finder)
+# ─────────────────────────────────────────────
+def scholar_link(name, university):
+    q = f"{name} {university} GIS OR geospatial OR urban analytics"
+    return f"https://scholar.google.com/scholar?q={q.replace(' ', '+')}"
 
-# ─────────────────────────────────────────────────────────────
-# Telegram
-# ─────────────────────────────────────────────────────────────
-def send_telegram(msg):
+# ─────────────────────────────────────────────
+# TELEGRAM
+# ─────────────────────────────────────────────
+def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
+    requests.post(url, json={
         "chat_id": TELEGRAM_CHAT_ID,
         "text": msg,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    try:
-        requests.post(url, json=payload, timeout=15)
-    except Exception as e:
-        log.error(e)
+        "disable_web_page_preview": True
+    })
 
-# ─────────────────────────────────────────────────────────────
-# Format
-# ─────────────────────────────────────────────────────────────
-def format_job(job, score):
+# ─────────────────────────────────────────────
+# FORMAT
+# ─────────────────────────────────────────────
+def format_job(job, s):
     title = html.escape(job.get("job_title") or "")
     company = html.escape(job.get("employer_name") or "")
     country = job.get("job_country") or ""
     link = job.get("job_apply_link") or ""
 
+    # attempt supervisor hint
+    uni = company
+    scholar = scholar_link(company, uni)
+
     return f"""
-🔥 <b>Score: {score}</b>
+🎓 <b>PhD Opportunity Score: {s}</b>
+
 💼 <b>{title}</b>
-🏢 {company}
+🏫 {company}
 📍 {country}
 
-🔗 <a href="{link}">Apply</a>
-    """
+🔗 Apply: {link}
 
-# ─────────────────────────────────────────────────────────────
+📚 Potential Supervisor Search:
+{scholar}
+"""
+
+# ─────────────────────────────────────────────
 # MAIN
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 def main():
-    log.info("Bot started")
-
     seen = load_seen()
-    all_jobs = []
+    jobs = []
 
     for q in SEARCH_QUERIES:
-        jobs = search_jobs(q)
-        for job in jobs:
-            jid = job.get("job_id") or job.get("job_apply_link")
+        results = search_jobs(q)
+
+        for j in results:
+            jid = j.get("job_id") or j.get("job_apply_link")
             if not jid or jid in seen:
                 continue
 
             seen.add(jid)
 
-            sc = score_job(job)
-
-            if sc >= 6:
-                job["_score"] = sc
-                all_jobs.append(job)
+            sc = score(j)
+            if sc >= 10:   # فقط high quality PhD
+                jobs.append((j, sc))
 
         time.sleep(1)
 
-    all_jobs.sort(key=lambda x: x["_score"], reverse=True)
+    jobs.sort(key=lambda x: x[1], reverse=True)
 
-    if not all_jobs:
-        send_telegram("🔍 No strong Spatial Data Science jobs found today.")
+    if not jobs:
+        send("🔍 No strong PhD / Research opportunities found today.")
         save_seen(seen)
         return
 
-    send_telegram(f"🚀 <b>Top Spatial Data Science Jobs</b>\nFound: {len(all_jobs)}")
+    send(f"🚀 <b>Top PhD / Research Opportunities</b>\nFound: {len(jobs)}")
 
-    for job in all_jobs[:MAX_JOBS_PER_RUN]:
-        send_telegram(format_job(job, job["_score"]))
+    for job, sc in jobs[:MAX_JOBS]:
+        send(format_job(job, sc))
         time.sleep(1)
 
     save_seen(seen)
-    log.info("Done")
+    log.info("done")
 
-# ─────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     main()
