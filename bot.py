@@ -7,250 +7,202 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-# ─── Optional: Google Sheets ──────────────────────────────────────────────────
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    SHEETS_AVAILABLE = True
-except ImportError:
-    SHEETS_AVAILABLE = False
-
-# ─── Logging ──────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-RAPIDAPI_KEY       = os.environ["RAPIDAPI_KEY"]
-TELEGRAM_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
-GSHEET_CREDENTIALS = os.environ.get("GSHEET_CREDENTIALS", "")
-GSHEET_ID          = os.environ.get("GSHEET_ID", "")
-GSHEET_SHEET_NAME  = "Jobs"
+# ─────────────────────────────────────────────────────────────
+# ENV
+# ─────────────────────────────────────────────────────────────
+RAPIDAPI_KEY     = os.environ["RAPIDAPI_KEY"]
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-SEEN_JOBS_FILE    = Path("seen_jobs.txt")
-MAX_SEEN_JOBS     = 2000
-MAX_JOBS_PER_RUN  = 15
+SEEN_JOBS_FILE   = Path("seen_jobs.txt")
+MAX_JOBS_PER_RUN = 10
 
-# ─── کلمات جستجو شخصی سازی شده ─────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# CORE SEARCH (Spatial Data Science Focus)
+# ─────────────────────────────────────────────────────────────
 SEARCH_QUERIES = [
-
-    # Spatial Data Science
-    "Spatial Data Scientist",
     "Geospatial Data Scientist",
+    "Spatial Data Scientist",
     "GIS Data Scientist",
-    "Geospatial Machine Learning",
+    "Geospatial Machine Learning Engineer",
 
-    # Urban Analytics
+    "Smart City Data Scientist",
     "Urban Data Scientist",
-    "Urban Analytics",
     "Urban Informatics",
-    "Smart City Data Analyst",
+    "Smart Mobility Analyst",
 
-    # Transportation
     "Transportation Data Scientist",
     "Mobility Data Scientist",
-    "Transit Data Analyst",
-    "Transportation GIS",
+    "Public Transit Analyst",
 
-    # GIS + Python
     "GIS Analyst Python",
     "Geospatial Developer",
-    "GIS Specialist Python",
+    "GIS Engineer",
 
-    # Research
     "Research Assistant GIS",
-    "Research Associate Transportation",
-    "Research Assistant Urban Analytics",
-    "PhD Geospatial",
+    "Urban Analytics Researcher",
+    "PhD GIS",
 ]
 
-# ─── کلمات ممنوعه اصلاح شده ─────────────────────────────────────────────────────
-BLACKLIST_KEYWORDS = [
-    "senior",
-    "staff",
-    "principal",
-    "director",
-    "vp",
-    "vice president",
-    "manager",
-    "15+ years",
-    "10+ years",
-    "12+ years",
-]
-
-# ─── مهارت‌های مورد نیاز ──────────────────────────────────────────────────────
-REQUIRED_KEYWORDS = [
-    "python",
-    "gis",
-    "geospatial",
-    "spatial",
-    "geopandas",
-    "arcgis",
-    "qgis",
-    "machine learning",
-    "data science",
-    "sql",
-    "transportation",
-    "mobility",
-    "urban",
-]
-
-# ══════════════════════════════════════════════════════════════════════════════
-
-def load_seen_jobs() -> set:
+# ─────────────────────────────────────────────────────────────
+# Load seen jobs
+# ─────────────────────────────────────────────────────────────
+def load_seen():
     if SEEN_JOBS_FILE.exists():
-        ids = set(line.strip() for line in SEEN_JOBS_FILE.read_text().splitlines() if line.strip())
-        log.info(f"Loaded {len(ids)} seen job IDs from cache")
-        return ids
-    log.info("No cache file found — starting fresh")
+        return set(SEEN_JOBS_FILE.read_text().splitlines())
     return set()
 
+def save_seen(seen):
+    SEEN_JOBS_FILE.write_text("\n".join(list(seen)[-2000:]))
 
-def save_seen_jobs(seen: set) -> None:
-    ids_list = list(seen)
-    if len(ids_list) > MAX_SEEN_JOBS:
-        ids_list = ids_list[-MAX_SEEN_JOBS:]
-    SEEN_JOBS_FILE.write_text("\n".join(ids_list))
-    log.info(f"Saved {len(ids_list)} job IDs to cache")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# JSearch API
-# ══════════════════════════════════════════════════════════════════════════════
-
-def search_jobs(query: str, retries: int = 3) -> list:
+# ─────────────────────────────────────────────────────────────
+# API
+# ─────────────────────────────────────────────────────────────
+def search_jobs(query):
     url = "https://jsearch.p.rapidapi.com/search"
     headers = {
-        "x-rapidapi-key":  RAPIDAPI_KEY,
+        "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "jsearch.p.rapidapi.com",
     }
     params = {
-        "query":          query,
-        "num_pages":      "1",
-        "date_posted":    "3days",
-        # حذف work_from_home برای پیدا کردن شغل‌های مهاجرتی واقعی
+        "query": query,
+        "num_pages": "1",
+        "date_posted": "3days",
     }
 
-    for attempt in range(1, retries + 1):
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=20)
-
-            if resp.status_code == 429:
-                log.warning("Rate limit hit — waiting 60s before retry...")
-                time.sleep(60)
-                continue
-
-            if resp.status_code == 403:
-                log.error("API key invalid or not subscribed (403)")
-                return []
-
-            resp.raise_for_status()
-            data = resp.json()
-
-            if data.get("status") != "OK":
-                log.warning(f"API non-OK for '{query}': {data.get('error')}")
-                return []
-
-            return data.get("data", [])
-
-        except requests.exceptions.Timeout:
-            log.warning(f"Timeout on attempt {attempt}/{retries} for '{query}'")
-        except requests.exceptions.JSONDecodeError:
-            log.error(f"Invalid JSON response for '{query}'")
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=20)
+        if r.status_code != 200:
             return []
-        except requests.exceptions.RequestException as e:
-            log.error(f"Request error (attempt {attempt}/{retries}): {e}")
+        data = r.json()
+        return data.get("data", [])
+    except:
+        return []
 
-        if attempt < retries:
-            wait = 5 * attempt
-            log.info(f"Waiting {wait}s before retry...")
-            time.sleep(wait)
+# ─────────────────────────────────────────────────────────────
+# Scoring System (MIGRATION INTELLIGENCE)
+# ─────────────────────────────────────────────────────────────
+def score_job(job):
+    text = ((job.get("job_title") or "") + " " + (job.get("job_description") or "")).lower()
 
-    log.error(f"All {retries} attempts failed for '{query}'")
-    return []
+    score = 0
 
+    # Core GIS / Spatial
+    if "geospatial" in text: score += 5
+    if "spatial" in text: score += 4
+    if "gis" in text: score += 4
 
-# ══════════════════════════════════════════════════════════════════════════════
-# فیلترها
-# ══════════════════════════════════════════════════════════════════════════════
+    # Core skills
+    if "python" in text: score += 3
+    if "machine learning" in text: score += 4
+    if "data science" in text: score += 4
+    if "sql" in text: score += 2
 
-def is_blacklisted(job: dict) -> bool:
-    description = (job.get("job_description") or "").lower()
-    title       = (job.get("job_title") or "").lower()
-    combined    = f"{title} {description}"
+    # Domain relevance
+    if "urban" in text: score += 3
+    if "smart city" in text: score += 4
+    if "transportation" in text: score += 4
+    if "mobility" in text: score += 4
+    if "transit" in text: score += 3
 
-    for keyword in BLACKLIST_KEYWORDS:
-        if keyword.lower() in combined:
-            log.info(f"  ⛔ Blacklisted '{job.get('job_title')}' — matched: '{keyword}'")
-            return True
-    return False
+    # Research advantage
+    if "research" in text: score += 2
+    if "phd" in text: score += 3
+    if "university" in text: score += 2
 
+    # NEGATIVE FILTER (SEO killer)
+    if "seo" in text: score -= 10
+    if "marketing" in text: score -= 8
+    if "content" in text: score -= 6
+    if "wordpress" in text: score -= 6
 
-def has_required_keywords(job: dict) -> bool:
-    text = (
-        (job.get("job_title") or "") +
-        " " +
-        (job.get("job_description") or "")
-    ).lower()
-    return any(keyword.lower() in text for keyword in REQUIRED_KEYWORDS)
+    return score
 
-
-# ══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
 # Telegram
-# ══════════════════════════════════════════════════════════════════════════════
-
-def send_telegram(text: str) -> bool:
+# ─────────────────────────────────────────────────────────────
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id":                  TELEGRAM_CHAT_ID,
-        "text":                     text,
-        "parse_mode":               "HTML",
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": msg,
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     try:
-        resp = requests.post(url, json=payload, timeout=15)
-        if not resp.ok:
-            log.error(f"Telegram error {resp.status_code}: {resp.text[:300]}")
-            return False
-        return True
+        requests.post(url, json=payload, timeout=15)
     except Exception as e:
-        log.error(f"Telegram send exception: {e}")
-        return False
+        log.error(e)
 
+# ─────────────────────────────────────────────────────────────
+# Format
+# ─────────────────────────────────────────────────────────────
+def format_job(job, score):
+    title = html.escape(job.get("job_title") or "")
+    company = html.escape(job.get("employer_name") or "")
+    country = job.get("job_country") or ""
+    link = job.get("job_apply_link") or ""
 
-def extract_salary(job: dict) -> str:
-    if job.get("job_salary_string"):
-        return job["job_salary_string"]
-    min_s  = job.get("job_min_salary")
-    max_s  = job.get("job_max_salary")
-    period = (job.get("job_salary_period") or "").lower()
-    period_map = {"year": "/yr", "month": "/mo", "hour": "/hr", "week": "/wk"}
-    period_label = period_map.get(period, f"/{period}" if period else "")
-    if min_s and max_s:
-        return f"${int(min_s):,} – ${int(max_s):,}{period_label}"
-    if min_s:
-        return f"${int(min_s):,}+{period_label}"
-    return ""
+    return f"""
+🔥 <b>Score: {score}</b>
+💼 <b>{title}</b>
+🏢 {company}
+📍 {country}
 
+🔗 <a href="{link}">Apply</a>
+    """
 
-def format_job(job: dict) -> str:
-    title    = html.escape(job.get("job_title")    or "بدون عنوان")
-    company  = html.escape(job.get("employer_name") or "نامشخص")
-    city     = html.escape(job.get("job_city")     or "")
-    country  = html.escape(job.get("job_country")  or "")
-    location = f"{city}, {country}".strip(", ") or "Remote"
-    source   = html.escape(job.get("job_publisher") or "")
-    link     = job.get("job_apply_link") or job.get("job_google_link") or ""
-    salary   = extract_salary(job)
+# ─────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────
+def main():
+    log.info("Bot started")
 
-    lines = [
-        f"💼 <b>{title}</b>",
-        f"🏢 {company}",
-        f"📍 {location}",
-    ]
-    if salary:
-       
+    seen = load_seen()
+    all_jobs = []
+
+    for q in SEARCH_QUERIES:
+        jobs = search_jobs(q)
+        for job in jobs:
+            jid = job.get("job_id") or job.get("job_apply_link")
+            if not jid or jid in seen:
+                continue
+
+            seen.add(jid)
+
+            sc = score_job(job)
+
+            if sc >= 6:
+                job["_score"] = sc
+                all_jobs.append(job)
+
+        time.sleep(1)
+
+    all_jobs.sort(key=lambda x: x["_score"], reverse=True)
+
+    if not all_jobs:
+        send_telegram("🔍 No strong Spatial Data Science jobs found today.")
+        save_seen(seen)
+        return
+
+    send_telegram(f"🚀 <b>Top Spatial Data Science Jobs</b>\nFound: {len(all_jobs)}")
+
+    for job in all_jobs[:MAX_JOBS_PER_RUN]:
+        send_telegram(format_job(job, job["_score"]))
+        time.sleep(1)
+
+    save_seen(seen)
+    log.info("Done")
+
+# ─────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    main()
