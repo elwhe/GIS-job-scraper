@@ -2,7 +2,7 @@ name: Job Search Bot 🤖
 
 on:
   schedule:
-    - cron: "30 3 * * *"   # هر روز ساعت ۷ صبح ایران (۳:۳۰ UTC)
+    - cron: "30 11 * * *"   # هر روز ساعت ۷ صبح ایران (۳:۳۰ UTC)
   workflow_dispatch:         # اجرای دستی از تب Actions
 
 env:
